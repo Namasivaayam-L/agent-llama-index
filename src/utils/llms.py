@@ -14,8 +14,6 @@ llm = AzureOpenAI(
     api_version=os.getenv('AZURE_API_VERSION'),
 )
 
-
-
 models = {
     # "gemini-1.5-flash-001":Gemini(os.getenv('GOOGLE_API_KEY'), model='models/gemini-1.5-flash-001'),
     # "gemini-1.5-flash-002":Gemini(os.getenv('GOOGLE_API_KEY'), model='models/gemini-1.5-flash-002'),
