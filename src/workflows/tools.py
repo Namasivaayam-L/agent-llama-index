@@ -1,6 +1,7 @@
+from typing import Dict, Any
 from config.logging import logger
-from llama_index.core.tools import FunctionTool
 
+from llama_index.core.tools import FunctionTool
 
 def license_api(
     license_id: str,
@@ -31,9 +32,9 @@ def proposal_builder_api(
 
 
 def process_sql_query_chain(
-    question,
-    user_id,
-    customer_data,
+    question: str,
+    user_id: str,
+    customer_data: Dict[str, Any],
 ) -> str:
     """
     Take a natural language question about opportunities and return relevant data.
@@ -72,4 +73,4 @@ tools = [
 ]
 
 
-tools_needing_approval = tools[:2]  
+tools_needing_approval = tools[:2]      

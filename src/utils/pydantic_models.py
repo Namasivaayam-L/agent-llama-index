@@ -8,11 +8,11 @@ from llama_index.core.workflow import Event
 
 class InputData(BaseModel): 
     query: str
-    customer_data: Optional[Dict[str, Any]]
+    customer_data: Optional[Dict[str, Any]] = None
 
 class RequestBody(BaseModel):
     user_id: str
-    session_id: str
+    session_id: Optional[str] = None
     input: InputData
 
 

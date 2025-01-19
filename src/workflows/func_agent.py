@@ -32,8 +32,8 @@ class FuncAgentWorkflow(Workflow):
     def __init__(
         self,
         *args: Any,
-        tools: list = None,
-        tools_needing_approval: list = None,
+        tools: list[BaseTool] = None,
+        tools_needing_approval: list[BaseTool] = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -58,7 +58,7 @@ class FuncAgentWorkflow(Workflow):
         self.llm = models[ev.get("model", "llama-3.3-70b-versatile")]
         logger.info(f"Using LLM model: {ev.get('model', 'llama-3.3-70b-versatile')}")
         
-        assert self.llm.metadata.is_function_calling_model
+        assert self.llm.metadata.is_function_calling_model and isinstance(self.llm, FunctionCallingLLM)
 
         self.chat_store = RedisChatStore(redis_url="redis://localhost:6379", ttl=300)
         logger.info("Initialized RedisChatStore")
@@ -75,25 +75,23 @@ class FuncAgentWorkflow(Workflow):
             raise ValueError("session_id not provided")
         logger.info(f"Session ID: {self.session_id}")
 
-        self.memory = ChatMemoryBuffer.from_defaults(
-            chat_store=self.chat_store,
-            chat_store_key=f"{self.user_id}:{self.session_id}",
-            llm=self.llm,
-        )
-        logger.info("Initialized ChatMemoryBuffer")
-
+        
         # get user input
         user_input = self.input.get(
             "query",
             "Please ask the user to give an input query, to start the conversation.",
         )
+        
+        self.chat_store_key = f"{self.user_id}-{self.session_id}"
+        logger.info(f"Chat store key: {self.chat_store_key}")
+        
         user_msg = ChatMessage(role="user", content=user_input)
-        self.memory.add_message(user_msg)
+        self.chat_store.add_message(self.chat_store_key,user_msg)
         logger.info("Added user message to memory")
 
         # get chat history
-        chat_history = self.memory.get()
-        logger.info("Retrieved chat history from memory")
+        chat_history = self.chat_store.get_messages(self.chat_store_key)
+        logger.info("Retrieved chat history from Chat store")
         logger.info("Completed prepare_chat_history step")
         return InputEvent(input=chat_history)
 
@@ -107,7 +105,7 @@ class FuncAgentWorkflow(Workflow):
             self.tools, chat_history=chat_history
         )
         logger.info("LLM response received")
-        self.memory.add_message(response.message)
+        self.chat_store.add_message(self.chat_store_key,response.message)
         logger.info("Added LLM message to memory")
 
         tool_calls = self.llm.get_tool_calls_from_response(
@@ -117,7 +115,7 @@ class FuncAgentWorkflow(Workflow):
 
         if not tool_calls:
             logger.info("No tool calls detected, returning StopEvent")
-            return StopEvent(result={"response": response, "sources": [*self.sources]})
+            return StopEvent(result=response.message.content)
         else:
             logger.info("Tool calls detected, returning ToolCallEvent")
             return ToolCallEvent(tool_calls=tool_calls)
@@ -173,17 +171,17 @@ class FuncAgentWorkflow(Workflow):
                 )
         logger.info("Completed tool execution loop")
         for msg in tool_msgs:
-            self.memory.put(msg)
+            self.chat_store.add_message(self.chat_store_key,msg)
         logger.info("Added tool messages to memory")
 
-        chat_history = self.memory.get()
+        chat_history = self.chat_store.get_messages(self.chat_store_key)
         logger.info("Retrieved chat history from memory")
         logger.info("Completed handle_tool_calls step")
         return InputEvent(input=chat_history)
 
 
 def build_func_agent_workflow() -> FuncAgentWorkflow:
-    return FuncAgentWorkflow(timeout=180, verbose=True)
+    return FuncAgentWorkflow(tools=tools, tools_needing_approval=tools_needing_approval, timeout=180, verbose=True)
 
 
 async def deploy_func_agent_workflow():
@@ -197,7 +195,6 @@ async def deploy_func_agent_workflow():
         control_plane_config=ControlPlaneConfig(host="0.0.0.0"),
     )
 
-
 # async def main():
 #         agent = FuncAgentWorkflow(
 #             llm= None , tools=tools, tools_needing_approval=tools[:2], timeout=120, verbose=True
@@ -208,10 +205,10 @@ async def deploy_func_agent_workflow():
 #         print(ret["response"])
 
 
-# if __name__ == "__main__":
-#     import asyncio, time
+if __name__ == "__main__":
+    import asyncio, time
 
-#     # time.sleep(5)
+    # time.sleep(5)
 
-#     # asyncio.run(deploy_func_agent_workflow())
-#     asyncio.run(main())
+    # asyncio.run(deploy_func_agent_workflow())
+    asyncio.run(deploy_func_agent_workflow())

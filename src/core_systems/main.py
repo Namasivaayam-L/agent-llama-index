@@ -12,6 +12,6 @@ async def deploy_core_systems():
     )
 
 
-# import asyncio
+import asyncio
 
-# asyncio.run(deploy_core_systems())
+asyncio.run(deploy_core_systems())
