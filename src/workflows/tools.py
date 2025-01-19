@@ -1,13 +1,16 @@
 from typing import Dict, Any
 from config.logging import logger
 
+from llama_index.core.workflow import Context
+from src.utils.func_tool_with_ctx import FunctionToolWithContext
 from llama_index.core.tools import FunctionTool
 
-def license_api(
-    license_id: str,
-) -> dict:
+async def license_api(
+    ctx: Context,
+    license_id: str
+) -> str:
     """
-    Retrieve and manage licensing data for opportunities.
+    Use this function to retrieve the license using license_id
     Args:
         license_id: The ID of the license to retrieve or manage.
     """
@@ -17,8 +20,9 @@ def license_api(
     return f"License API called with license ID: {license_id}"
 
 
-def proposal_builder_api(
-    oppty_id: str,
+async def proposal_builder_api(
+    ctx: Context,
+    oppty_id: str
 ) -> str:
     """
     Generate and manage proposal documents for opportunities.
@@ -31,10 +35,9 @@ def proposal_builder_api(
     return f"Proposal builder API called with opportunity ID: {oppty_id}"
 
 
-def process_sql_query_chain(
-    question: str,
-    user_id: str,
-    customer_data: Dict[str, Any],
+async def process_sql_query_chain(
+    ctx: Context,
+    question: str
 ) -> str:
     """
     Take a natural language question about opportunities and return relevant data.
@@ -42,11 +45,12 @@ def process_sql_query_chain(
     Args:
         question: A natural language question about opportunities data
     """
-
+    user_id = await ctx.get('user_id',None)
+    customer_data = await ctx.get('customer_data',None)
 
     logger.info(f"Processing SQL query chain with params: {question}, {user_id}, {customer_data}")
 
-    return f"Getting data from snowflake.{question.get('question','Question Not received')}, {user_id}, {customer_data}"
+    return f"Getting data from snowflake.{question}, {user_id}, {customer_data}"
 
 
 def update_oppty_field(oppty_id: str, field_name: str, field_value: str) -> str:
@@ -62,14 +66,14 @@ def update_oppty_field(oppty_id: str, field_name: str, field_value: str) -> str:
     """
     logger.info(f"Updating opportunity field: {oppty_id}, {field_name}, {field_value}")
 
-    return f"Updating opportunity field with ID: {oppty_id}"
+    return f"Updating opportunity field: {oppty_id}, {field_name}, {field_value}"
 
 
 tools = [
-    FunctionTool.from_defaults(process_sql_query_chain),
+    FunctionToolWithContext.from_defaults(async_fn=process_sql_query_chain),
     FunctionTool.from_defaults(update_oppty_field),
-    FunctionTool.from_defaults(license_api),
-    FunctionTool.from_defaults(proposal_builder_api),
+    FunctionToolWithContext.from_defaults(async_fn=license_api),
+    FunctionToolWithContext.from_defaults(async_fn=proposal_builder_api),
 ]
 
 

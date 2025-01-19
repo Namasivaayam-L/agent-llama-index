@@ -9,21 +9,21 @@ from phoenix.otel import register
 tracer_provider = register(endpoint="http://localhost:6006/v1/traces")
 LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
 
-
-from llama_index.llms.groq import Groq
 from llama_index.storage.chat_store.redis import RedisChatStore
-from llama_index.core.memory import ChatMemoryBuffer
+from llama_index.core.llms import ChatMessage
 from llama_index.core.tools.types import BaseTool
-from llama_index.core.workflow import Workflow, StartEvent, StopEvent, step
+from llama_index.core.workflow import (
+    Workflow,
+    Context,
+    StartEvent,
+    StopEvent,
+    step,
+    InputRequiredEvent,
+    HumanResponseEvent,
+)
 from llama_index.core.llms.function_calling import FunctionCallingLLM
 
-from llama_deploy import (
-    deploy_workflow,
-    WorkflowServiceConfig,
-    ControlPlaneConfig,
-)
-
-from src.workflows.tools import tools, tools_needing_approval
+from src.utils.func_tool_with_ctx import FunctionToolWithContext
 from src.utils.llms import models
 from src.utils.pydantic_models import *
 
@@ -41,24 +41,26 @@ class FuncAgentWorkflow(Workflow):
         self.tools = tools or []
         self.user_id = None
         self.tools_needing_approval = tools_needing_approval or []
-
+        self.tool_outputs = []
         self.sources = []
         logger.info("FuncAgentWorkflow initialized")
 
     @step
-    async def prepare_chat_history(self, ev: StartEvent) -> InputEvent:
+    async def prepare_chat_history(self, ctx: Context, ev: StartEvent) -> InputEvent:
         logger.info("Starting prepare_chat_history step")
         # clear sources
         self.sources = []
         logger.info("Cleared sources")
-        
+
         self.input = json.loads(ev.get("input", "{}"))
         logger.info(f"Input received: {self.input}")
-        
+
         self.llm = models[ev.get("model", "llama-3.3-70b-versatile")]
         logger.info(f"Using LLM model: {ev.get('model', 'llama-3.3-70b-versatile')}")
-        
-        assert self.llm.metadata.is_function_calling_model and isinstance(self.llm, FunctionCallingLLM)
+
+        assert self.llm.metadata.is_function_calling_model and isinstance(
+            self.llm, FunctionCallingLLM
+        )
 
         self.chat_store = RedisChatStore(redis_url="redis://localhost:6379", ttl=300)
         logger.info("Initialized RedisChatStore")
@@ -67,6 +69,7 @@ class FuncAgentWorkflow(Workflow):
         if not self.user_id:
             logger.error("user_id not provided")
             raise ValueError("user_id not provided")
+        await ctx.set("user_id", self.user_id)
         logger.info(f"User ID: {self.user_id}")
 
         self.session_id = ev.get("session_id", None)
@@ -75,38 +78,41 @@ class FuncAgentWorkflow(Workflow):
             raise ValueError("session_id not provided")
         logger.info(f"Session ID: {self.session_id}")
 
-        
         # get user input
         user_input = self.input.get(
             "query",
             "Please ask the user to give an input query, to start the conversation.",
         )
-        
+
+        if self.input.get("customer_data", None):
+            await ctx.set("customer_data", self.input.get("customer_data"))
+            logger.info(f"Customer data: {self.input.get('customer_data')}")
+
         self.chat_store_key = f"{self.user_id}-{self.session_id}"
         logger.info(f"Chat store key: {self.chat_store_key}")
-        
+
         user_msg = ChatMessage(role="user", content=user_input)
-        self.chat_store.add_message(self.chat_store_key,user_msg)
+        self.chat_store.add_message(self.chat_store_key, user_msg)
         logger.info("Added user message to memory")
 
         # get chat history
         chat_history = self.chat_store.get_messages(self.chat_store_key)
-        logger.info("Retrieved chat history from Chat store")
         logger.info("Completed prepare_chat_history step")
         return InputEvent(input=chat_history)
 
     @step
-    async def handle_llm_input(self, ev: InputEvent) -> ToolCallEvent | StopEvent:
+    async def handle_llm_input(
+        self, ctx: Context, ev: InputEvent
+    ) -> ToolCallEvent | InputRequiredEvent | StopEvent:
         logger.info("Starting handle_llm_input step")
         chat_history = ev.input
-        logger.info("Chat history retrieved")
+        logger.info(f"Chat history retrieved before llm call, {chat_history}")
 
         response = await self.llm.achat_with_tools(
             self.tools, chat_history=chat_history
         )
-        logger.info("LLM response received")
-        self.chat_store.add_message(self.chat_store_key,response.message)
-        logger.info("Added LLM message to memory")
+        logger.info(f"LLM response received {response}")
+
 
         tool_calls = self.llm.get_tool_calls_from_response(
             response, error_on_no_tool_call=False
@@ -115,13 +121,64 @@ class FuncAgentWorkflow(Workflow):
 
         if not tool_calls:
             logger.info("No tool calls detected, returning StopEvent")
-            return StopEvent(result=response.message.content)
-        else:
-            logger.info("Tool calls detected, returning ToolCallEvent")
-            return ToolCallEvent(tool_calls=tool_calls)
+            self.chat_store.add_message(self.chat_store_key, response.message)
+            logger.info("Added LLM message to memory")
+            return StopEvent(
+                result=json.dumps(
+                    {
+                        "response": response.message.content,
+                    }
+                )
+            )
+
+        for tool in tool_calls:
+            if tool.tool_name in [
+                t.metadata.get_name() for t in self.tools_needing_approval
+            ]:
+                await ctx.set("pending_tool", tool)
+                await ctx.set("pending_tool_message", response.message)
+                logger.info("Tool needs approval, returning InputRequiredEvent")
+
+                sys_msg = ChatMessage(
+                    role="system",
+                    content=f"Do you want to proceed with calling the tool {tool.tool_name}? (y/n)",
+                )
+                self.chat_store.add_message(self.chat_store_key, sys_msg)
+
+                return InputRequiredEvent(
+                    prefix="Waiting for human approval as Yes or No",
+                    payload=f"Do you want to proceed with calling the tool {tool.tool_name}? (y/n)",
+                )
+        logger.info("Tool calls detected, returning ToolCallEvent")
+        return ToolCallEvent(tool_calls=tool_calls)
 
     @step
-    async def handle_tool_calls(self, ev: ToolCallEvent) -> InputEvent:
+    async def review_tool_calls(
+        self, ctx: Context, ev: HumanResponseEvent
+    ) -> ToolCallEvent | StopEvent:
+        logger.info("Reviewing tool call step")
+
+        if ev.response.lower() == "y":
+            user_msg = ChatMessage(role="user", content=f"Yes, Approve")
+            self.chat_store.add_message(self.chat_store_key, user_msg)
+            return ToolCallEvent(
+                tool_calls=[await ctx.get("pending_tool")], stop_after_tool_call=True
+            )
+        else:
+            user_msg = ChatMessage(
+                role="user", content=f"No, Denied. Move on to next step)"
+            )
+            self.chat_store.add_message(self.chat_store_key, user_msg)
+            return StopEvent(
+                result=json.dumps(
+                    {
+                        "response": "You've Denied the request for tool call. What am I supposed to do next?"
+                    }
+                )
+            )
+
+    @step
+    async def handle_tool_calls(self, ctx: Context, ev: ToolCallEvent) -> StopEvent:
         logger.info("Starting handle_tool_calls step")
         tool_calls = ev.tool_calls
         logger.info(f"Received tool calls: {tool_calls}")
@@ -131,7 +188,7 @@ class FuncAgentWorkflow(Workflow):
         logger.info("Starting tool execution loop")
         # call tools -- safely!
         for tool_call in tool_calls:
-            tool = tools_by_name.get(tool_call.tool_name)
+            tool = tools_by_name.get(tool_call.tool_name, None)
             additional_kwargs = {
                 "tool_call_id": tool_call.tool_id,
                 "name": tool.metadata.get_name(),
@@ -146,13 +203,25 @@ class FuncAgentWorkflow(Workflow):
                     )
                 )
                 continue
+
             logger.info(f"Executing tool: {tool.metadata.get_name()}")
             try:
-                tool_output = tool(**tool_call.tool_kwargs)
+                if isinstance(tool, FunctionToolWithContext):
+                    tool_output = await tool.acall(ctx, **tool_call.tool_kwargs)
+                else:
+                    tool_output = await tool.acall(**tool_call.tool_kwargs)
+
+                self.tool_outputs.append(tool_output.content)
                 self.sources.append(tool_output)
                 logger.info(
                     f"Tool {tool.metadata.get_name()} output: {tool_output.content}"
                 )
+                # if ev.get("stop_after_tool_call", False):
+                #     tool_msgs.append(await ctx.get("pending_tool_message"))
+                #     logger.info(f"Tool Call, with approval {tool_msgs[0]}")
+                # else:
+                #     tool_msgs.append(tool_call)
+                #     logger.info(f"Tool Call, without approval {tool_msgs[0]}")
                 tool_msgs.append(
                     ChatMessage(
                         role="tool",
@@ -171,44 +240,14 @@ class FuncAgentWorkflow(Workflow):
                 )
         logger.info("Completed tool execution loop")
         for msg in tool_msgs:
-            self.chat_store.add_message(self.chat_store_key,msg)
-        logger.info("Added tool messages to memory")
-
+            self.chat_store.add_message(self.chat_store_key, msg)
         chat_history = self.chat_store.get_messages(self.chat_store_key)
-        logger.info("Retrieved chat history from memory")
+        logger.info(f"Retrieved chat history from memory, {chat_history}")
         logger.info("Completed handle_tool_calls step")
-        return InputEvent(input=chat_history)
-
-
-def build_func_agent_workflow() -> FuncAgentWorkflow:
-    return FuncAgentWorkflow(tools=tools, tools_needing_approval=tools_needing_approval, timeout=180, verbose=True)
-
-
-async def deploy_func_agent_workflow():
-    func_agent_workflow = build_func_agent_workflow()
-
-    await deploy_workflow(
-        func_agent_workflow,
-        workflow_config=WorkflowServiceConfig(
-            host="0.0.0.0", port=8002, service_name="func_agent_workflow"
-        ),
-        control_plane_config=ControlPlaneConfig(host="0.0.0.0"),
-    )
-
-# async def main():
-#         agent = FuncAgentWorkflow(
-#             llm= None , tools=tools, tools_needing_approval=tools[:2], timeout=120, verbose=True
-#         )
-
-#         ret = await agent.run(input="I wanna fetch all the customer data with the account name starting with 'A'")
-
-#         print(ret["response"])
-
-
-if __name__ == "__main__":
-    import asyncio, time
-
-    # time.sleep(5)
-
-    # asyncio.run(deploy_func_agent_workflow())
-    asyncio.run(deploy_func_agent_workflow())
+        return StopEvent(
+            result=json.dumps(
+                {
+                    "response": tool_output.content,
+                }
+            )
+        )
