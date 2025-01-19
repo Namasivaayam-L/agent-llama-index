@@ -4,10 +4,10 @@ from typing import Any, List
 from config.logging import logger
 
 from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
-from phoenix.otel import register
+# from phoenix.otel import register
 
-tracer_provider = register(endpoint="http://localhost:6006/v1/traces")
-LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
+# tracer_provider = register(endpoint="http://localhost:6006/v1/traces")
+# LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
 
 from llama_index.storage.chat_store.redis import RedisChatStore
 from llama_index.core.llms import ChatMessage
