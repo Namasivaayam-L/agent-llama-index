@@ -117,12 +117,13 @@ class FuncAgentWorkflow(Workflow):
         tool_calls = self.llm.get_tool_calls_from_response(
             response, error_on_no_tool_call=False
         )
-        logger.info(f"Tool calls detected: {tool_calls}")
+        logger.info(f"Tool calls detected: {tool_calls}, {response}")
 
+        self.chat_store.add_message(self.chat_store_key, response.message)
+        logger.info("Added LLM message to memory")
+        
         if not tool_calls:
             logger.info("No tool calls detected, returning StopEvent")
-            self.chat_store.add_message(self.chat_store_key, response.message)
-            logger.info("Added LLM message to memory")
             return StopEvent(
                 result=json.dumps(
                     {
@@ -139,11 +140,11 @@ class FuncAgentWorkflow(Workflow):
                 await ctx.set("pending_tool_message", response.message)
                 logger.info("Tool needs approval, returning InputRequiredEvent")
 
-                sys_msg = ChatMessage(
-                    role="system",
-                    content=f"Do you want to proceed with calling the tool {tool.tool_name}? (y/n)",
-                )
-                self.chat_store.add_message(self.chat_store_key, sys_msg)
+                # sys_msg = ChatMessage(
+                #     role="system",
+                #     content=f"Do you want to proceed with calling the tool {tool.tool_name}? (y/n)",
+                # )
+                # self.chat_store.add_message(self.chat_store_key, sys_msg)
 
                 return InputRequiredEvent(
                     prefix="Waiting for human approval as Yes or No",
@@ -155,27 +156,38 @@ class FuncAgentWorkflow(Workflow):
     @step
     async def review_tool_calls(
         self, ctx: Context, ev: HumanResponseEvent
-    ) -> ToolCallEvent | StopEvent:
+    ) -> InputEvent | ToolCallEvent | StopEvent:
         logger.info("Reviewing tool call step")
-
+        pending_tool_call = await ctx.get("pending_tool")
+        logger.info(f"Pending tool call: {pending_tool_call}")
         if ev.response.lower() == "y":
-            user_msg = ChatMessage(role="user", content=f"Yes, Approve")
-            self.chat_store.add_message(self.chat_store_key, user_msg)
+            # user_msg = ChatMessage(role="user", content=f"Yes, Approve")
+            # self.chat_store.add_message(self.chat_store_key, user_msg)
             return ToolCallEvent(
-                tool_calls=[await ctx.get("pending_tool")], stop_after_tool_call=True
+                tool_calls=[pending_tool_call], stop_after_tool_call=True
             )
         else:
+            additional_kwargs = {
+                "tool_call_id": pending_tool_call.tool_id,
+                "tool_name": pending_tool_call.tool_name,
+                # "tool_kwargs": pending_tool_call.tool_kwargs
+            }
             user_msg = ChatMessage(
-                role="user", content=f"No, Denied. Move on to next step)"
+                role="tool", content=f"No, Denied. Move on to next step)", additional_kwargs=additional_kwargs
             )
             self.chat_store.add_message(self.chat_store_key, user_msg)
-            return StopEvent(
-                result=json.dumps(
-                    {
-                        "response": "You've Denied the request for tool call. What am I supposed to do next?"
-                    }
+            if ev.response.lower() == "n":
+                return StopEvent(
+                    result=json.dumps(
+                        {
+                            "response": "You've Denied the request for tool call. What am I supposed to do next?"
+                        }
+                    )
                 )
-            )
+            else:
+                user_msg = ChatMessage(role="user", content=ev.response)
+                self.chat_store.add_message(self.chat_store_key, user_msg)
+                return InputEvent(input=self.chat_store.get_messages(self.chat_store_key))
 
     @step
     async def handle_tool_calls(self, ctx: Context, ev: ToolCallEvent) -> StopEvent:

@@ -73,9 +73,9 @@ async def chat_with_bot(websocket: WebSocket):
                 f"Model output generated successfully. modelOutput: {type(model_output)}, {model_output['response']}"
             )
             await websocket.send_json({
+                "session_id": request.session_id,
                 "message": model_output['response'],
                 "tool_outputs": model_output.get('tool_outputs', None),
-                "session_id": request.session_id,
             })
     except Exception as e:
         logger.error(f"Error in model generation: {str(e)}")
