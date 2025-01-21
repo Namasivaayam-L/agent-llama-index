@@ -7,16 +7,16 @@ from llama_index.storage.chat_store.redis import RedisChatStore
 from llama_index.core.llms import ChatMessage
 
 from typing import List, Dict
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 import uuid, json
 from src.workflows.func_agent import FuncAgentWorkflow
 from src.workflows.tools import tools, tools_needing_approval
-from src.utils.pydantic_models import RequestBody
+from src.utils.pydantic_models import RequestBody, ChatResponse # Add ChatResponse
 from config.logging import logger
 
-chat_store = RedisChatStore(redis_url="redis://localhost:6379", ttl=300, db=0)
+chat_store = RedisChatStore(redis_url="redis://localhost:6379", db=0)
 
 app = FastAPI()
 
@@ -30,63 +30,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.websocket("/chat")
-async def chat_with_bot(websocket: WebSocket):
-    await websocket.accept()
-    
-    func_agent_workflow = FuncAgentWorkflow(tools=tools, tools_needing_approval=tools_needing_approval, chat_store=chat_store, timeout=None, verbose=True)
-    
+func_agent_workflow = FuncAgentWorkflow(tools=tools, tools_needing_approval=tools_needing_approval, chat_store=chat_store, timeout=None, verbose=True)
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat_with_bot(request: RequestBody):
+    """
+    Handles chat requests and returns a response.
+    """
+
+    if request.session_id is None:
+        request.session_id = str(uuid.uuid4())
+
+    logger.info(f"Received request: {request}")
+
     try:
-        while True:
-            request: RequestBody = RequestBody(**(await websocket.receive_json()))
-            
-            if request.input.query in ["exit", "quit", "bye"]:
-                break
-            
-            if request.session_id is None:
-                request.session_id = str(uuid.uuid4())
-            
-            logger.info(f"Received request: {request}, {type(request)}")
-            handler: WorkflowHandler = func_agent_workflow.run(
-                model="gpt-4o-mini",
-                # model="llama-3.1-8b-instant",
-                # model="mixtral-8x7b-32768",
-                # model="llama-3.3-70b-versatile",
-                user_id=request.user_id,
-                session_id=request.session_id,
-                input=request.input.model_dump_json(),
-            )
+        handler: WorkflowHandler = func_agent_workflow.run(
+            model="gpt-4o-mini",
+            # model="llama-3.1-8b-instant",
+            # model="mixtral-8x7b-32768",
+            # model="llama-3.3-70b-versatile",
+            user_id=request.user_id,
+            session_id=request.session_id,
+            input=request.input.model_dump_json(),
+        )
 
-            # now we handle events coming back from the workflow
-            async for event in handler.stream_events():
-                logger.info(f"Received event: {event}")
-                # if we get an InputRequiredEvent, that means the workflow needs human input
-                if isinstance(event, InputRequiredEvent):
-                    await websocket.send_json({
-                        "message": event.payload,
-                        "session_id": request.session_id
-                    })
-                    # we expect the next thing from the socket to be human input
-                    request: RequestBody = RequestBody(**(await websocket.receive_json()))
-                    # which we send back to the workflow as a HumanResponseEvent
-                    handler.ctx.send_event(HumanResponseEvent(response=request.input.query))
-            # this only happens when the workflow is complete
-            model_output = await handler
-            model_output = json.loads(model_output)
-            logger.info(
-                f"Model output generated successfully. modelOutput: {type(model_output)}, {model_output['response']}"
-            )
-            await websocket.send_json({
-                "session_id": request.session_id,
-                "message": model_output['response'],
-                "tool_outputs": model_output.get('tool_outputs', None),
-            })
-    except Exception as e:
-        logger.error(f"Error in model generation: {str(e)}")
-        await websocket.send_json({"type": "error", "payload": str(e)})
-    finally:
-        await websocket.close()
+        full_response = ""
+        async for event in handler.stream_events():
+            logger.info(f"Received event: {event}")
+            if isinstance(event, InputRequiredEvent):
+                return ChatResponse(
+                    message=event.response, session_id=request.session_id
+                )
 
+        model_output = await handler
+        model_output = json.loads(model_output)
+        full_response = model_output['response']
+        logger.info(f"Model output generated successfully: {full_response}")
+
+        return ChatResponse(
+            session_id=request.session_id,
+            message=full_response,
+            tool_outputs=model_output.get('tool_outputs', None),
+        )
+
+    except HTTPException as e:
+        raise e  # Re-raise HTTPExceptions to be handled by FastAPI
 
 def format_chat_history(chat_history: List[ChatMessage]) -> List[Dict[str, str]]:
     formatted_history = []

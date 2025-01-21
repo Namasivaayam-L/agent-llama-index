@@ -26,3 +26,10 @@ class ToolCallEvent(Event):
 
 class FunctionOutputEvent(Event):
     output: ToolOutput
+    
+
+class ChatResponse(BaseModel):
+    session_id: str
+    message: str
+    tool_outputs: Optional[Dict] = None # or any appropriate type for tool_outputs
+
