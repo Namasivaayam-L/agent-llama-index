@@ -34,6 +34,7 @@ class FuncAgentWorkflow(Workflow):
         *args: Any,
         tools: list[BaseTool] = None,
         tools_needing_approval: list[BaseTool] = None,
+        chat_store = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -41,6 +42,7 @@ class FuncAgentWorkflow(Workflow):
         self.tools = tools or []
         self.user_id = None
         self.tools_needing_approval = tools_needing_approval or []
+        self.chat_store = chat_store
         self.tool_outputs = []
         self.sources = []
         logger.info("FuncAgentWorkflow initialized")
@@ -62,7 +64,6 @@ class FuncAgentWorkflow(Workflow):
             self.llm, FunctionCallingLLM
         )
 
-        self.chat_store = RedisChatStore(redis_url="redis://localhost:6379", ttl=300)
         logger.info("Initialized RedisChatStore")
 
         self.user_id = ev.get("user_id", None)
@@ -88,7 +89,7 @@ class FuncAgentWorkflow(Workflow):
             await ctx.set("customer_data", self.input.get("customer_data"))
             logger.info(f"Customer data: {self.input.get('customer_data')}")
 
-        self.chat_store_key = f"{self.user_id}-{self.session_id}"
+        self.chat_store_key = f"{self.user_id}_{self.session_id}"
         logger.info(f"Chat store key: {self.chat_store_key}")
 
         user_msg = ChatMessage(role="user", content=user_input)
@@ -140,12 +141,6 @@ class FuncAgentWorkflow(Workflow):
                 await ctx.set("pending_tool_message", response.message)
                 logger.info("Tool needs approval, returning InputRequiredEvent")
 
-                # sys_msg = ChatMessage(
-                #     role="system",
-                #     content=f"Do you want to proceed with calling the tool {tool.tool_name}? (y/n)",
-                # )
-                # self.chat_store.add_message(self.chat_store_key, sys_msg)
-
                 return InputRequiredEvent(
                     prefix="Waiting for human approval as Yes or No",
                     payload=f"Do you want to proceed with calling the tool {tool.tool_name}? (y/n)",
@@ -161,16 +156,13 @@ class FuncAgentWorkflow(Workflow):
         pending_tool_call = await ctx.get("pending_tool")
         logger.info(f"Pending tool call: {pending_tool_call}")
         if ev.response.lower() == "y":
-            # user_msg = ChatMessage(role="user", content=f"Yes, Approve")
-            # self.chat_store.add_message(self.chat_store_key, user_msg)
             return ToolCallEvent(
                 tool_calls=[pending_tool_call], stop_after_tool_call=True
             )
         else:
             additional_kwargs = {
                 "tool_call_id": pending_tool_call.tool_id,
-                "tool_name": pending_tool_call.tool_name,
-                # "tool_kwargs": pending_tool_call.tool_kwargs
+                "name": pending_tool_call.tool_name,
             }
             user_msg = ChatMessage(
                 role="tool", content=f"No, Denied. Move on to next step)", additional_kwargs=additional_kwargs
@@ -228,12 +220,6 @@ class FuncAgentWorkflow(Workflow):
                 logger.info(
                     f"Tool {tool.metadata.get_name()} output: {tool_output.content}"
                 )
-                # if ev.get("stop_after_tool_call", False):
-                #     tool_msgs.append(await ctx.get("pending_tool_message"))
-                #     logger.info(f"Tool Call, with approval {tool_msgs[0]}")
-                # else:
-                #     tool_msgs.append(tool_call)
-                #     logger.info(f"Tool Call, without approval {tool_msgs[0]}")
                 tool_msgs.append(
                     ChatMessage(
                         role="tool",
