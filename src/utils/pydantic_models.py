@@ -8,6 +8,7 @@ from llama_index.core.llms import ChatMessage
 
 class InputData(BaseModel):
     query: str
+    tool_id: Optional[str] = None 
     customer_data: Optional[Dict[str, Any]] = None
 
 class RequestBody(BaseModel):
@@ -31,5 +32,5 @@ class FunctionOutputEvent(Event):
 class ChatResponse(BaseModel):
     session_id: str
     message: str
-    tool_outputs: Optional[Dict] = None # or any appropriate type for tool_outputs
+    tool_id: Optional[str] = None # or any appropriate type for tool_outputs
 

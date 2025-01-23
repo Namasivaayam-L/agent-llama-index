@@ -34,7 +34,7 @@ class FuncAgentWorkflow(Workflow):
         *args: Any,
         tools: list[BaseTool] = None,
         tools_needing_approval: list[BaseTool] = None,
-        chat_store = None,
+        chat_store=None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -79,19 +79,24 @@ class FuncAgentWorkflow(Workflow):
             raise ValueError("session_id not provided")
         logger.info(f"Session ID: {self.session_id}")
 
-        # get user input
-        user_input = self.input.get(
-            "query",
-            "Please ask the user to give an input query, to start the conversation.",
-        )
+
+
+        self.chat_store_key = f"{self.user_id}_{self.session_id}"
+        logger.info(f"Chat store key: {self.chat_store_key}")
+        
+        if self.input.get("tool_id", None):
+            await ctx.set("tool_id", self.input.get("tool_id"))
+            logger.info(f"Tool ID that needs approval: {self.input.get('tool_id')}")
+            return HumanResponseEvent(response=self.input.get("query"), tool_id=self.input.get('tool_id'))
 
         if self.input.get("customer_data", None):
             await ctx.set("customer_data", self.input.get("customer_data"))
             logger.info(f"Customer data: {self.input.get('customer_data')}")
 
-        self.chat_store_key = f"{self.user_id}_{self.session_id}"
-        logger.info(f"Chat store key: {self.chat_store_key}")
-
+        user_input = self.input.get(
+            "query",
+            "Please ask the user to give an input query, to start the conversation.",
+        )
         user_msg = ChatMessage(role="user", content=user_input)
         self.chat_store.add_message(self.chat_store_key, user_msg)
         logger.info("Added user message to memory")
@@ -99,12 +104,13 @@ class FuncAgentWorkflow(Workflow):
         # get chat history
         chat_history = self.chat_store.get_messages(self.chat_store_key)
         logger.info("Completed prepare_chat_history step")
+
         return InputEvent(input=chat_history)
 
     @step
     async def handle_llm_input(
         self, ctx: Context, ev: InputEvent
-    ) -> ToolCallEvent | InputRequiredEvent | StopEvent:
+    ) -> ToolCallEvent | StopEvent:
         logger.info("Starting handle_llm_input step")
         chat_history = ev.input
         logger.info(f"Chat history retrieved before llm call, {chat_history}")
@@ -114,7 +120,6 @@ class FuncAgentWorkflow(Workflow):
         )
         logger.info(f"LLM response received {response}")
 
-
         tool_calls = self.llm.get_tool_calls_from_response(
             response, error_on_no_tool_call=False
         )
@@ -122,13 +127,14 @@ class FuncAgentWorkflow(Workflow):
 
         self.chat_store.add_message(self.chat_store_key, response.message)
         logger.info("Added LLM message to memory")
-        
+
         if not tool_calls:
             logger.info("No tool calls detected, returning StopEvent")
             return StopEvent(
                 result=json.dumps(
                     {
                         "response": response.message.content,
+                        "session_id": self.session_id
                     }
                 )
             )
@@ -139,11 +145,16 @@ class FuncAgentWorkflow(Workflow):
             ]:
                 await ctx.set("pending_tool", tool)
                 await ctx.set("pending_tool_message", response.message)
-                logger.info("Tool needs approval, returning InputRequiredEvent")
-
-                return InputRequiredEvent(
-                    prefix="Waiting for human approval as Yes or No",
-                    response=f"Do you want to proceed with calling the tool {tool.tool_name}? (y/n)",
+                logger.info("Tool needs approval, returning StopEvent")
+                
+                return StopEvent(
+                    result=json.dumps(
+                        {
+                            "response": f"Do you want to proceed with calling the tool {tool.tool_name}? (y/n)",
+                            "tool_id": tool.tool_id,
+                            "session_id": self.session_id,
+                        }
+                    )
                 )
         logger.info("Tool calls detected, returning ToolCallEvent")
         return ToolCallEvent(tool_calls=tool_calls)
@@ -156,30 +167,45 @@ class FuncAgentWorkflow(Workflow):
         pending_tool_call = await ctx.get("pending_tool")
         logger.info(f"Pending tool call: {pending_tool_call}")
         if ev.response.lower() == "y":
-            return ToolCallEvent(
-                tool_calls=[pending_tool_call], stop_after_tool_call=True
-            )
+            if ev.tool_id == pending_tool_call.tool_id:
+                return ToolCallEvent(
+                    tool_calls=[pending_tool_call], stop_after_tool_call=True
+                )
+            else:
+                return StopEvent(
+                    result=json.dumps(
+                        {
+                            "response": f"Tool Id mismatch, Not approved.",
+                            "session_id": self.session_id,
+                        }
+                    )
+                )
         else:
             additional_kwargs = {
                 "tool_call_id": pending_tool_call.tool_id,
                 "name": pending_tool_call.tool_name,
             }
             user_msg = ChatMessage(
-                role="tool", content=f"No, Denied. Move on to next step)", additional_kwargs=additional_kwargs
+                role="tool",
+                content=f"No, Denied. Move on to next step)",
+                additional_kwargs=additional_kwargs,
             )
             self.chat_store.add_message(self.chat_store_key, user_msg)
-            if ev.response.lower() == "n":
+            if ev.response.lower() == "n" and ev.tool_id == pending_tool_call.tool_id:
                 return StopEvent(
                     result=json.dumps(
                         {
-                            "response": "You've Denied the request for tool call. What am I supposed to do next?"
+                            "response": "You've Denied the request for tool call. What am I supposed to do next?",
+                            "session_id": self.session_id,
                         }
                     )
                 )
             else:
                 user_msg = ChatMessage(role="user", content=ev.response)
                 self.chat_store.add_message(self.chat_store_key, user_msg)
-                return InputEvent(input=self.chat_store.get_messages(self.chat_store_key))
+                return InputEvent(
+                    input=self.chat_store.get_messages(self.chat_store_key)
+                )
 
     @step
     async def handle_tool_calls(self, ctx: Context, ev: ToolCallEvent) -> StopEvent:
@@ -244,8 +270,6 @@ class FuncAgentWorkflow(Workflow):
         logger.info("Completed handle_tool_calls step")
         return StopEvent(
             result=json.dumps(
-                {
-                    "response": tool_output.content,
-                }
+                {"response": tool_output.content, "session_id": self.session_id}
             )
         )

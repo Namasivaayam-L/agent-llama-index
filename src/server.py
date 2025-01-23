@@ -44,7 +44,7 @@ async def chat_with_bot(request: RequestBody):
     logger.info(f"Received request: {request}")
 
     try:
-        handler: WorkflowHandler = func_agent_workflow.run(
+        model_output = await func_agent_workflow.run(
             model="gpt-4o-mini",
             # model="llama-3.1-8b-instant",
             # model="mixtral-8x7b-32768",
@@ -54,23 +54,13 @@ async def chat_with_bot(request: RequestBody):
             input=request.input.model_dump_json(),
         )
 
-        full_response = ""
-        async for event in handler.stream_events():
-            logger.info(f"Received event: {event}")
-            if isinstance(event, InputRequiredEvent):
-                return ChatResponse(
-                    message=event.response, session_id=request.session_id
-                )
-
-        model_output = await handler
         model_output = json.loads(model_output)
-        full_response = model_output['response']
-        logger.info(f"Model output generated successfully: {full_response}")
+        logger.info(f"Model output generated successfully: {model_output}")
 
         return ChatResponse(
             session_id=request.session_id,
-            message=full_response,
-            tool_outputs=model_output.get('tool_outputs', None),
+            message=model_output.get('response', "Model returned No response"),
+            tool_id=model_output.get('tool_id', None),
         )
 
     except HTTPException as e:

@@ -5,15 +5,13 @@ load_dotenv(os.path.join('./config/','.env'))
 from llama_index.llms.groq import Groq
 from llama_index.llms.azure_openai import AzureOpenAI
 
-
 llm = AzureOpenAI(
-    model=os.getenv('AZURE_MODEL'),
-    deployment_name=os.getenv('AZURE_DEPLOYMENT_NAME'),
-    azure_endpoint=os.getenv('AZURE_ENDPOINT'),
-    api_key=os.getenv('AZURE_API_KEY'),
-    api_version=os.getenv('AZURE_API_VERSION'),
+    model="gpt-4o-mini",
+    deployment_name="gpt-4o-mini",
+    azure_endpoint="https://test-hitl.openai.azure.com/",
+    api_key="3znHvdrgGYE4kqPFKegeMFlWs49jMuXwtpJMuSiBCSYs8klDq0n3JQQJ99BAACYeBjFXJ3w3AAABACOGc2Vq",
+    api_version="2024-05-01-preview",
 )
-
 models = {
     # "gemini-1.5-flash-001":Gemini(os.getenv('GOOGLE_API_KEY'), model='models/gemini-1.5-flash-001'),
     # "gemini-1.5-flash-002":Gemini(os.getenv('GOOGLE_API_KEY'), model='models/gemini-1.5-flash-002'),
