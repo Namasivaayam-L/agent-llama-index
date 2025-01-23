@@ -142,8 +142,9 @@ class FuncAgentWorkflow(Workflow):
                 logger.info("Tool needs approval, returning InputRequiredEvent")
 
                 return InputRequiredEvent(
-                    prefix="Waiting for human approval as Yes or No",
-                    payload=f"Do you want to proceed with calling the tool {tool.tool_name}? (y/n)",
+                    prefix="",
+                    tool_call_id=tool.tool_id,
+                    response=f"Do you want to proceed with calling the tool {tool.tool_name}? (y/n)",
                 )
         logger.info("Tool calls detected, returning ToolCallEvent")
         return ToolCallEvent(tool_calls=tool_calls)
