@@ -47,7 +47,7 @@ sudo service redis-server start
 ## 🧑‍💻 Run the Server
 
 ```bash
-python main.py
+python app.py
 ```
 
 Server will be running at: `http://localhost:5000`
@@ -59,7 +59,7 @@ Server will be running at: `http://localhost:5000`
 ### Endpoint
 
 ```text
-ws://localhost:8000/chat
+ws://localhost:5000/chat
 ```
 
 ### Sample JSON Input
@@ -163,7 +163,7 @@ GET /sessions/{user_id}/{session_id}
 import asyncio, json, websockets
 
 async def test():
-    uri = "ws://localhost:8000/chat"
+    uri = "ws://localhost:5000/chat"
     async with websockets.connect(uri) as ws:
         await ws.send(json.dumps({
             "user_id": "user_001",
