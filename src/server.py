@@ -48,8 +48,7 @@ async def chat_with_bot(websocket: WebSocket):
             
             logger.info(f"Received request: {request}, {type(request)}")
             handler: WorkflowHandler = func_agent_workflow.run(
-                model="gpt-4o-mini",
-                # model="llama-3.1-8b-instant",
+                model="llama-3.1-8b-instant",
                 # model="mixtral-8x7b-32768",
                 # model="llama-3.3-70b-versatile",
                 user_id=request.user_id,
