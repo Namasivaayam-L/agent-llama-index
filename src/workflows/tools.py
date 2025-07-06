@@ -1,80 +1,60 @@
-from typing import Dict, Any
-from config.logging import logger
-
+import redis.asyncio as redis
 from llama_index.core.workflow import Context
 from src.utils.func_tool_with_ctx import FunctionToolWithContext
-from llama_index.core.tools import FunctionTool
 
-async def license_api(
-    ctx: Context,
-    license_id: str
-) -> str:
-    """
-    Use this function to retrieve the license using license_id
-    Args:
-        license_id: The ID of the license to retrieve or manage.
-    """
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
 
-    logger.info(f"Calling license API for license ID: {license_id}")
+async def fetch_customer_chat_history(ctx: Context, session_id: str) -> str:
+    history = await redis_client.get(session_id)
+    return history if history else f"No chat history found for session: {session_id}"
 
-    return f"License API called with license ID: {license_id}"
+async def faq_lookup_tool(ctx: Context, question: str) -> str:
+    # Mocked lookup logic
+    faq_dict = {
+        "reset password": "Go to settings > Account > Reset Password",
+        "cancel subscription": "Visit the subscription page and click 'Cancel Subscription'"
+    }
+    for key, ans in faq_dict.items():
+        if key in question.lower():
+            return ans
+    return "I'm escalating this to an agent for more accurate support."
 
+async def ticket_status_checker(ctx: Context, ticket_id: str) -> str:
+    return f"Ticket {ticket_id} is currently being reviewed by our support team."
 
-async def proposal_builder_api(
-    ctx: Context,
-    oppty_id: str
-) -> str:
-    """
-    Generate and manage proposal documents for opportunities.
-    Args:
-        oppty_id: The ID of the opportunity for which the proposal is being generated.
-    """
+async def suggest_next_step(ctx: Context, issue_description: str) -> str:
+    if "login" in issue_description.lower():
+        return "Try resetting your password or clearing your browser cookies."
+    if "billing" in issue_description.lower():
+        return "Please review your billing page for pending invoices."
+    return "Would you like me to connect you with a support agent?"
 
-    logger.info(f"Calling proposal builder API for opportunity ID: {oppty_id}")
+async def get_product_doc_snippet(ctx: Context, error_code: str) -> str:
+    docs = {
+        "ERR_401": "Unauthorized access. Check if your token is valid.",
+        "ERR_500": "Internal server error. Try again later or contact support."
+    }
+    return docs.get(error_code, "No documentation available for this error code.")
 
-    return f"Proposal builder API called with opportunity ID: {oppty_id}"
+async def raise_ticket_on_behalf(ctx: Context, user_email: str, issue: str) -> str:
+    return f"A support ticket has been drafted for {user_email} with the issue: '{issue}'. Please review and approve."
 
-
-async def process_sql_query_chain(
-    ctx: Context,
-    question: str
-) -> str:
-    """
-    Take a natural language question about opportunities and return relevant data.
-    
-    Args:
-        question: A natural language question about opportunities data
-    """
-    user_id = await ctx.get('user_id',None)
-    customer_data = await ctx.get('customer_data',None)
-
-    logger.info(f"Processing SQL query chain with params: {question}, {user_id}, {customer_data}")
-
-    return f"Getting data from snowflake.{question}, {user_id}, {customer_data}"
-
-
-def update_oppty_field(oppty_id: str, field_name: str, field_value: str) -> str:
-    """
-    Update specific fields in opportunity records based on input parameters.
-
-    Args:
-
-        oppty_id: The ID of the opportunity to update.
-        field_name: The name of the field to be updated.
-        field_value: The new value to set for the specified field.
-
-    """
-    logger.info(f"Updating opportunity field: {oppty_id}, {field_name}, {field_value}")
-
-    return f"Updating opportunity field: {oppty_id}, {field_name}, {field_value}"
+async def compose_response_for_complex_issue(ctx: Context, issue_summary: str) -> str:
+    return f"Drafted response: 'We understand your issue: {issue_summary}. Our technical team is actively working on it. We will get back shortly.' Please approve before sending."
 
 
 tools = [
-    FunctionToolWithContext.from_defaults(async_fn=process_sql_query_chain),
-    FunctionTool.from_defaults(update_oppty_field),
-    FunctionToolWithContext.from_defaults(async_fn=license_api),
-    FunctionToolWithContext.from_defaults(async_fn=proposal_builder_api),
+    FunctionToolWithContext.from_defaults(async_fn=fetch_customer_chat_history),
+    FunctionToolWithContext.from_defaults(async_fn=faq_lookup_tool),
+    FunctionToolWithContext.from_defaults(async_fn=ticket_status_checker),
+    FunctionToolWithContext.from_defaults(async_fn=suggest_next_step),
+    FunctionToolWithContext.from_defaults(async_fn=get_product_doc_snippet),
+    FunctionToolWithContext.from_defaults(async_fn=raise_ticket_on_behalf),
+    FunctionToolWithContext.from_defaults(async_fn=compose_response_for_complex_issue),
 ]
 
-
-tools_needing_approval = tools[:2]      
+tools_needing_approval = [
+    FunctionToolWithContext.from_defaults(async_fn=get_product_doc_snippet),
+    FunctionToolWithContext.from_defaults(async_fn=raise_ticket_on_behalf),
+    FunctionToolWithContext.from_defaults(async_fn=compose_response_for_complex_issue),
+]

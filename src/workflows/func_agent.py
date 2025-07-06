@@ -3,15 +3,14 @@ import json
 from typing import Any, List
 from config.logging import logger
 
-from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
-from phoenix.otel import register
+# from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
+# from phoenix.otel import register
 
-tracer_provider = register(endpoint="http://localhost:6006/v1/traces")
-LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
+# tracer_provider = register(endpoint="http://localhost:6006/v1/traces")
+# LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
 
-from llama_index.storage.chat_store.redis import RedisChatStore
 from llama_index.core.llms import ChatMessage
-from llama_index.core.tools.types import BaseTool
+from llama_index.core.tools.types import BaseTool   
 from llama_index.core.workflow import (
     Workflow,
     Context,
@@ -23,10 +22,16 @@ from llama_index.core.workflow import (
 )
 from llama_index.core.llms.function_calling import FunctionCallingLLM
 
+from llama_deploy import (
+    deploy_workflow,
+    WorkflowServiceConfig,
+    ControlPlaneConfig,
+)
+
 from src.utils.func_tool_with_ctx import FunctionToolWithContext
 from src.utils.llms import models
 from src.utils.pydantic_models import *
-
+from src.utils.prompts import agent_system_prompt
 
 class FuncAgentWorkflow(Workflow):
     def __init__(
@@ -91,7 +96,12 @@ class FuncAgentWorkflow(Workflow):
 
         self.chat_store_key = f"{self.user_id}_{self.session_id}"
         logger.info(f"Chat store key: {self.chat_store_key}")
-
+        
+        system_prompt = ChatMessage(
+            role="system",
+            content=agent_system_prompt
+        )
+        chat_history.insert(0, system_prompt)
         user_msg = ChatMessage(role="user", content=user_input)
         self.chat_store.add_message(self.chat_store_key, user_msg)
         logger.info("Added user message to memory")
@@ -249,3 +259,20 @@ class FuncAgentWorkflow(Workflow):
                 }
             )
         )
+
+def build_agent_workflow() -> FuncAgentWorkflow:
+    return FuncAgentWorkflow(timeout=180, verbose=True)
+
+
+async def deploy_agentic_workflow():
+    agent_workflow = build_agent_workflow()
+
+    await deploy_workflow(
+        agent_workflow,
+        workflow_config=WorkflowServiceConfig(
+            host="0.0.0.0",
+            port=8002, 
+            service_name="agent_workflow"
+        ),
+        control_plane_config=ControlPlaneConfig(host="0.0.0.0"),
+    )
