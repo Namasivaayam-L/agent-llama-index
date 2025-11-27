@@ -1,0 +1,29 @@
+# .portfolio/config.yml
+name: HITL-Enhanced LLM Agent
+slug: agent-llama-index
+description: >
+  An enterprise-ready, multi-tool LLM agent framework built using FastAPI, llama-index, and Redis.
+  Supports human-in-the-loop (HITL) workflows, function calling, and session persistence.
+tech_stack:
+  - FastAPI
+  - LlamaIndex
+  - Redis
+  - WebSockets
+  - Python
+  - Pydantic
+  - OpenAI
+  - Docker
+  - Phoenix
+  - OTEL
+tags:
+  - AI/ML
+  - Full-Stack
+  - Human-in-the-Loop
+  - Enterprise
+is_active: true
+readme_path: README.md
+repo_url: https://github.com/Namasivaayam-L/agent-llama-index
+thumbnail: https://raw.githubusercontent.com/Namasivaayam-L/agent-llama-index/main/.portfolio/cover.png
+created_at: 2025-11-27
+updated_at: 2025-11-27
+featured: false
